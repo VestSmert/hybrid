@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# Large data & lab artifacts
+data/
+*.tif
+*.tiff
+*.avi
+*.mp4
+*.czi
+.ipynb_checkpoints/
