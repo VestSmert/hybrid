@@ -16,4 +16,6 @@ Notes
 - Prefer lossless formats (TIFF/Zarr) for intermediate results.
 """
 
-__all__ = ["tif"]
+from .tif import read_tiff_stack, write_tiff_stack
+
+__all__ = ["read_tiff_stack", "write_tiff_stack"]

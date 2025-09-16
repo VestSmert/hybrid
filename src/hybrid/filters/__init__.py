@@ -27,4 +27,17 @@ Typical defaults
 - CLAHE: clip_limit ≈ 2.0–3.0, tile size ≈ 16×16.
 """
 
-__all__ = ["dog", "flatfield", "contrast"]
+# Short imports for public API
+from .dog import dog_bandpass          # DoG bandpass (2D/3D)  :contentReference[oaicite:4]{index=4}
+from .flatfield import (                # Flat-field estimation & apply  :contentReference[oaicite:5]{index=5}
+    estimate_flatfield,
+    apply_flatfield,
+)
+from .contrast import clahe_u8         # CLAHE convenience wrapper  :contentReference[oaicite:6]{index=6}
+
+__all__ = [
+    "dog_bandpass",
+    "estimate_flatfield",
+    "apply_flatfield",
+    "clahe_u8",
+]
