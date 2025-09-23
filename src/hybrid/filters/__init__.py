@@ -28,16 +28,24 @@ Typical defaults
 """
 
 # Short imports for public API
-from .dog import dog_bandpass          # DoG bandpass (2D/3D)  :contentReference[oaicite:4]{index=4}
-from .flatfield import (                # Flat-field estimation & apply  :contentReference[oaicite:5]{index=5}
-    estimate_flatfield,
-    apply_flatfield,
-)
-from .contrast import clahe_u8         # CLAHE convenience wrapper  :contentReference[oaicite:6]{index=6}
+from .dog import dog_bandpass
+from .flatfield import estimate_flatfield, apply_flatfield
+from .contrast import clahe_u8
+
+# Modules export (dog, flatfield, contrast)
+import importlib as _importlib
+dog = _importlib.import_module(".dog", __name__)
+flatfield = _importlib.import_module(".flatfield", __name__)
+contrast = _importlib.import_module(".contrast", __name__)
 
 __all__ = [
+    # functions
     "dog_bandpass",
     "estimate_flatfield",
     "apply_flatfield",
     "clahe_u8",
+    # modules
+    "dog",
+    "flatfield",
+    "contrast",
 ]

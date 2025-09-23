@@ -10,7 +10,7 @@ zero‑mean (approximately) movie for downstream analysis.
 
 Typical usage
 -------------
->>> from hybrid.preprocess.detrend import gaussian_baseline, detrend
+>>> from hybrid.preprocess import gaussian_baseline, detrend
 >>> F0 = gaussian_baseline(movie, sigma_t=100.0)
 >>> F, F0 = detrend(movie, sigma_t=100.0)
 

@@ -10,7 +10,7 @@ GPU (CuPy) with automatic selection.
 
 Typical usage
 -------------
->>> from hybrid.mc.pwrigid import pwrigid_movie
+>>> from hybrid.mc import pwrigid_movie
 >>> res = pwrigid_movie(movie, tiles=(4,4), overlap=32, upsample=10, device="auto")
 >>> corrected = res.corrected
 >>> shifts = res.grid_shifts

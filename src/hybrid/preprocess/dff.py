@@ -9,7 +9,7 @@ Provide utilities to compute ΔF/F either from a precomputed baseline `F0`
 
 Typical usage
 -------------
->>> from hybrid.preprocess.dff import dff_from_baseline, dff_percentile
+>>> from hybrid.preprocess import dff_from_baseline, dff_percentile
 >>> dff = dff_from_baseline(movie, F0)
 >>> dff = dff_percentile(movie, p=10.0, win=301)                     # auto device
 >>> dff = dff_percentile(movie, p=10.0, win=301, device="cpu")       # force CPU
