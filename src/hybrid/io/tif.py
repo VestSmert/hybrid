@@ -1,4 +1,3 @@
-# --- file: hybrid/io/tif.py ---
 """
 TIFF I/O helpers (TYX stacks)
 
@@ -9,12 +8,19 @@ read_tiff_stack(
     normalize=False,
     p_low=1.0,
     p_high=99.5,
-    dtype=np.float32,
+    dtype=None,
     *,
     normalize_mode: {"none","global","percentile"} = "none",
+    method: {"auto","imread","memmap"} = "auto",
+    ram_budget_bytes: Optional[int] = 2_147_483_648,
 )
-    Read a multi-page TIFF into shape (T, Y, X). Optionally apply robust
-    normalization to [0,1] and cast to desired dtype (default float32).
+    Read a TIFF stack into shape (T, Y, X) with **OOM-safe defaults**.
+
+    Key behavior changes (long-term fix):
+      - Default `dtype=None` (keep source dtype) to avoid implicit upcasts.
+      - Default `method="auto"`: prefers memory-mapped reading for large files.
+      - `ram_budget_bytes` protects from accidental full-RAM allocations. If an
+        operation would exceed the budget, a clear, actionable error is raised.
 
     Notes on normalization:
       - normalize_mode="none": keep original scale (recommended for QC / dF/F).
@@ -49,6 +55,7 @@ __all__ = [
     # new streaming-friendly APIs:
     "read_tiff_memmap",
     "TiffStreamWriter",
+    "iter_tiff_blocks",
 ]
 
 # --- optional codec backend (for compression) ---------------------------------
@@ -57,6 +64,11 @@ try:
     _HAVE_IMAGECODECS = True
 except Exception:
     _HAVE_IMAGECODECS = False
+
+
+# --- small helpers ------------------------------------------------------------
+def _nbytes(shape, dtype) -> int:
+    return int(np.prod(shape, dtype=np.int64)) * np.dtype(dtype).itemsize
 
 
 # --- normalization helpers ----------------------------------------------------
@@ -88,18 +100,20 @@ def _normalize_percentile(a: np.ndarray, p_low: float, p_high: float, eps: float
     return a
 
 
-# --- core reader --------------------------------------------------------------
+# --- core reader (OOM-safe) ---------------------------------------------------
 def read_tiff_stack(
     path: str,
     normalize: bool = False,
     p_low: float = 1.0,
     p_high: float = 99.5,
-    dtype: Optional[type] = np.float32,
+    dtype: Optional[type] = None,
     *,
     normalize_mode: Literal["none", "global", "percentile"] = "none",
+    method: Literal["auto", "imread", "memmap"] = "auto",
+    ram_budget_bytes: Optional[int] = 2_147_483_648,
 ) -> np.ndarray:
     """
-    Read a TIFF stack as (T, Y, X).
+    Read a TIFF stack as (T, Y, X) with OOM-safe defaults.
 
     Parameters
     ----------
@@ -113,53 +127,125 @@ def read_tiff_stack(
     p_low, p_high : float
         Percentiles for robust normalization (used only if normalize_mode="percentile").
     dtype : numpy dtype or None
-        Output dtype (default float32). If None, keep original dtype (no cast).
+        Output dtype. If None, keep original dtype (no cast).
     normalize_mode : {"none","global","percentile"}, optional (keyword-only)
         Select normalization strategy:
           - "none":     no scaling, keep original intensity scale.
           - "global":   global min/max → [0,1].
           - "percentile": robust p_low/p_high → [0,1].
+    method : {"auto","imread","memmap"}
+        - "auto" (default): prefer memmap for large stacks; fall back to imread
+          when within RAM budget.
+        - "memmap": force memory-mapped read (will raise if the file is not
+          memmappable due to compression/tiling).
+        - "imread": force materialization into RAM (only do this for small files).
+    ram_budget_bytes : int or None
+        Soft limit to prevent inadvertent large allocations. If None, no limit.
 
     Returns
     -------
     np.ndarray
-        Array of shape (T, Y, X) with the requested dtype.
+        Array of shape (T, Y, X). May be a numpy.memmap if method uses memmap and
+        no normalization/casting was requested.
 
     Notes
     -----
     - If both `normalize` and `normalize_mode` are provided, `normalize_mode`
       takes precedence unless `normalize=True` and `normalize_mode="none"`,
-      in which case percentile normalization is applied to preserve legacy behavior.
+      in which case percentile normalization is applied (legacy behavior).
+    - For very large, **compressed** TIFFs that are not memory-mappable, prefer
+      iterating via `iter_tiff_blocks(...)` and write out with `TiffStreamWriter`.
     """
-    arr = imread(path)  # supports BigTIFF, tiled, etc.
-    if arr.ndim == 2:
-        # Promote single frame to (1, Y, X) for consistency
-        arr = arr[None, ...]
-    if arr.ndim != 3:
-        raise ValueError(f"Expected 3D stack (T,Y,X). Got shape {arr.shape}.")
+    # discover shape & dtype cheaply, and detect storage order
+    with TiffFile(path) as tif:
+        series = tif.series[0]
+        shp = series.shape  # could be (T,Y,X) or (Y,X,T)
+        if len(shp) == 2:
+            shp = (1, shp[0], shp[1])
+        elif len(shp) != 3:
+            raise ValueError(f"Expected 3D stack (T,Y,X). Got shape {shp}.")
+        src_dtype = series.dtype
+        # heuristics: if last axis is time → (Y,X,T)
+        stored_yxt = (shp[0] < 64 and shp[-1] > 64)
+        T_est = shp[-1] if stored_yxt else shp[0]
 
-    # Decide normalization path with backward compatibility
+    # decide default mode and safety budget
     mode = normalize_mode
     if normalize and (normalize_mode == "none"):
-        # legacy behavior: normalize=True -> percentile scaling
-        mode = "percentile"
+        mode = "percentile"  # legacy
 
-    a = np.asarray(arr)
+    # prefer memmap for big sources or when explicitly asked
+    src_nbytes = _nbytes((T_est,) + shp[-2:], src_dtype)
+    prefer_memmap = (method == "memmap") or (
+        method == "auto" and (ram_budget_bytes is not None and src_nbytes > ram_budget_bytes)
+    )
 
-    # Early exit: if no normalization and dtype is None → keep as-is (no extra copy)
+    a: np.ndarray
+    if prefer_memmap:
+        # Try to open as memmap; if not possible and forced → raise; else fallback
+        try:
+            a = read_tiff_memmap(path, as_TYX=True)
+        except ValueError:
+            if method == "memmap":
+                raise  # caller explicitly requested memmap
+            # compressed/tilled and too big to imread safely → guard
+            if ram_budget_bytes is not None and src_nbytes > ram_budget_bytes:
+                raise MemoryError(
+                    "TIFF is not memory-mappable and exceeds ram_budget_bytes. "
+                    "Use iter_tiff_blocks(...) + TiffStreamWriter for streaming, "
+                    "or lower the budget explicitly."
+                )
+            # else, small enough → fall through to imread
+            a = imread(path)
+            if a.ndim == 2:
+                a = a[None, ...]
+            if a.ndim != 3:
+                raise ValueError(f"Expected 3D stack (T,Y,X). Got shape {a.shape}.")
+    else:
+        # imread path (within budget)
+        if ram_budget_bytes is not None and src_nbytes > ram_budget_bytes:
+            # prevent accidental OOM
+            raise MemoryError(
+                "Stack exceeds ram_budget_bytes for imread. Choose method='memmap' "
+                "or increase budget."
+            )
+        a = imread(path)
+        if a.ndim == 2:
+            a = a[None, ...]
+        if a.ndim != 3:
+            raise ValueError(f"Expected 3D stack (T,Y,X). Got shape {a.shape}.")
+
+    # Early return: no normalization and no cast requested → cheap
     if mode == "none" and dtype is None:
         return a
 
+    # Estimate output bytes to avoid surprise allocations
+    out_dtype = (
+        (np.float32 if mode in ("global", "percentile") else a.dtype)
+        if dtype is None else np.dtype(dtype)
+    )
+    out_nbytes = _nbytes(a.shape, out_dtype)
+    if isinstance(a, np.memmap) and (ram_budget_bytes is not None) and (out_nbytes > ram_budget_bytes):
+        raise MemoryError(
+            "Requested normalization/cast would allocate a full in-RAM array "
+            f"(~{out_nbytes/2**30:.2f} GiB) exceeding ram_budget_bytes. "
+            "Tip: keep dtype=None & normalize_mode='none' to work lazily, or "
+            "stream via iter_tiff_blocks(...) into a disk memmap using TiffStreamWriter."
+        )
+
+    # Perform normalization/cast in-RAM (safe given the budget checks above)
     if mode == "none":
-        out = a.astype(dtype if dtype is not None else a.dtype, copy=False)
+        out = a.astype(out_dtype, copy=False)
     elif mode == "global":
         scaled = _normalize_global(a)
-        out = scaled.astype(dtype if dtype is not None else scaled.dtype, copy=False)
+        out = scaled.astype(out_dtype, copy=False)
     elif mode == "percentile":
         scaled = _normalize_percentile(a, p_low, p_high)
-        out = scaled.astype(dtype if dtype is not None else scaled.dtype, copy=False)
+        out = scaled.astype(out_dtype, copy=False)
     else:
-        raise ValueError(f"Unknown normalize_mode: {normalize_mode!r}. Must be 'none', 'global', or 'percentile'.")
+        raise ValueError(
+            f"Unknown normalize_mode: {normalize_mode!r}. Must be 'none', 'global', or 'percentile'."
+        )
 
     return out
 
@@ -186,7 +272,7 @@ def read_tiff_memmap(path: str, *, as_TYX: bool = True) -> np.ndarray:
         raise ValueError(f"Expected 3D stack (T,Y,X). Got shape {a.shape}.")
     return a
 
-# --- streaming-friendly iterator over time blocks --------------------------------
+# --- streaming-friendly iterator over time blocks -----------------------------
 def iter_tiff_blocks(
     path: str,
     block: int = 64,
