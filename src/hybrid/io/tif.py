@@ -29,9 +29,10 @@ read_tiff_stack(
       - The legacy flag `normalize=True` is treated as normalize_mode="percentile"
         for backward compatibility (see Parameters below).
 
-write_tiff_stack(path, arr, dtype="uint16", scale="auto", bigtiff=True, compress=False)
-    Save a (T, Y, X) array to TIFF. If dtype != input dtype, data is scaled/
-    clipped appropriately. Adds metadata axes='TYX' for downstream tools.
+    write_tiff_stack(path, arr, dtype="float32", scale="auto", bigtiff=True, compress=False)
+        Save a (T, Y, X) array to TIFF. Default stores **float32** (analysis-friendly).
+        Use dtype="uint16" only for compact preview exports; values will be
+        scaled/clipped as needed. Adds metadata axes='TYX'.
 
 Notes
 -----
