@@ -101,7 +101,7 @@ def _flatfield(movie: np.ndarray, sigma: int, eps: float = 1e-6) -> Tuple[np.nda
 
 # ------------------------------- core --------------------------------------- #
 
-def process_one(
+def run_prep(
     path: str,
     outdir: str,
     *,
@@ -221,7 +221,7 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     print(f"[prep] files={len(files)} outdir={args.outdir}")
     for f in files:
-        process_one(
+        run_prep(
             f, args.outdir,
             flat_sigma=(args.flat_sigma if args.flat_sigma > 0 else None),
             save_flat=args.save_flat, save_ff=args.save_ff,

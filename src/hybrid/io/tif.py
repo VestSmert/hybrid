@@ -177,9 +177,9 @@ class TiffStreamWriter:
 
     Notes
     -----
-    - Writes OME-TIFF pages; axes metadata is kept minimal.
+    - Writes plain TIFF pages with minimal tags (no OME/ImageJ at page level).
     - For very large stacks use bigtiff=True.
-    - Compression: DEFLATE if compress=True (cannot be memmapped later).
+    - If compress=True, uses DEFLATE (cannot be memmapped later).
     """
 
     def __init__(
@@ -188,22 +188,16 @@ class TiffStreamWriter:
         dtype: str | np.dtype = "float32",
         bigtiff: bool = True,
         compress: bool = True,
-        ome: bool = True,
-        imagej: bool = False,
-        axes: str = "YX",
     ):
         self.path = path
         self.dtype = np.dtype(dtype)
         self.bigtiff = bool(bigtiff)
         self.compress = bool(compress)
-        self.ome = bool(ome)
-        self.imagej = bool(imagej)
-        self.axes = axes
         self._tw: Optional[TiffWriter] = None
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
     def __enter__(self):
-        self._tw = TiffWriter(self.path, bigtiff=self.bigtiff)
+        self._tw = TiffWriter(self.path, bigtiff=self.bigtiff)  # no ome/imagej here
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -220,12 +214,8 @@ class TiffStreamWriter:
         self._tw.write(
             f,
             compression=("deflate" if self.compress else None),
-            ome=self.ome,
-            imagej=self.imagej,
-            metadata={"axes": self.axes},
             photometric="minisblack",
         )
-
 
 def write_tiff_stack(
     path: str,

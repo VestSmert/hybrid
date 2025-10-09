@@ -55,7 +55,7 @@ def save_qc_png(base_out, mean_im, corr_map, pnr_map):
     return png_path
 
 
-def process_one(
+def run_qc(
     path: str,
     outdir: str,
     stride: int,
@@ -148,7 +148,7 @@ def main():
     for f in files:
         print(f"[QC] {f}")
         rows.append(
-            process_one(
+            run_qc(
                 f,
                 args.outdir,
                 args.stride,

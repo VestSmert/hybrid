@@ -77,7 +77,7 @@ def _stage_tiff_to_memmap(path: str, block: int = 64) -> Tuple[np.memmap, Tuple[
 
 # ------------------------------- core --------------------------------------- #
 
-def run_one(
+def run_mc(
     path: str,
     outdir: str,
     *,
@@ -154,7 +154,7 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     print(f"[mc] files={len(files)} outdir={args.outdir}")
     for f in files:
-        run_one(
+        run_mc(
             f,
             args.outdir,
             tiles=(args.tiles[0], args.tiles[1]),
