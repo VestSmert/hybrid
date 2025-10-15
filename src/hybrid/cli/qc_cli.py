@@ -1,5 +1,4 @@
 # --- file: hybrid/cli/qc_cli.py ---
-
 """
 QC map generator: Correlation + PNR.
 
@@ -27,8 +26,9 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
-from hybrid.io.tif import read_tiff_stack
-from hybrid.summary.qc_maps import correlation_image, pnr_image
+# Updated imports (public re-exports)
+from hybrid.io import read_tiff_stack
+from hybrid.summary import correlation_image, pnr_image
 
 
 def center_crop(arr, size=None):
@@ -58,43 +58,50 @@ def save_qc_png(base_out, mean_im, corr_map, pnr_map):
 def run_qc(
     path: str,
     outdir: str,
-    stride: int,
-    max_frames: int | None,
-    crop: int | None,
-    hp_window: int,
-    norm_mode: str,
-    p_low: float,
-    p_high: float,
+    stride: int = 2,
+    max_frames: int | None = 800,
+    crop: int | None = 512,
+    hp_window: int = 15,
+    norm_mode: str = "none",     # "none" | "global" | "percentile"
+    p_low: float = 1.0,
+    p_high: float = 99.5,
 ):
-    # read with chosen normalization mode (none/global/percentile)
+    # OOM-safe read with explicit normalization mode
     movie = read_tiff_stack(
         path,
-        normalize=False,               # legacy flag off (we use normalize_mode explicitly)
+        normalize_mode=norm_mode,
         p_low=p_low,
         p_high=p_high,
-        dtype=np.float32,
-        normalize_mode=norm_mode,
+        dtype=None,               # keep source dtype
     )
 
-    # temporal downsample and crop for speed
-    if stride > 1:
+    # Ensure 3D (some TIFFs may look 2D by series probe)
+    if movie.ndim == 2:
+        movie = movie[None, ...]
+
+    # Speed/size controls
+    if stride and stride > 1:
         movie = movie[::stride]
     if max_frames is not None:
         movie = movie[:max_frames]
     movie = center_crop(movie, crop)
 
-    # QC maps
-    corr_map = correlation_image(movie, time_axis=0)
-    pnr_map = pnr_image(movie, time_axis=0, hp_window=hp_window)
+    # Ensure odd hp_window
+    if hp_window % 2 == 0:
+        hp_window += 1
 
-    # save outputs
+    # QC maps
+    corr_map = correlation_image(movie, time_axis=0)              # (H, W) float32
+    pnr_map  = pnr_image(movie, time_axis=0, hp_window=hp_window) # (H, W) float32
+
+    # Save outputs
     base = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0])
     os.makedirs(outdir, exist_ok=True)
     np.save(base + "_corr.npy", corr_map.astype(np.float32, copy=False))
     np.save(base + "_pnr.npy",  pnr_map.astype(np.float32, copy=False))
     png_path = save_qc_png(base, movie.mean(axis=0), corr_map, pnr_map)
 
-    # summary stats
+    # Summary stats
     inner = corr_map[1:-1, 1:-1]
     stats = {
         "file": os.path.basename(path),
@@ -117,20 +124,30 @@ def run_qc(
     return stats
 
 
+def _parse_maybe_int(v: str | None) -> int | None:
+    if v is None:
+        return None
+    s = str(v).strip().lower()
+    if s in ("none", "null", "nil", ""):
+        return None
+    return int(v)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="Glob, e.g. D:/data/*.tif")
     ap.add_argument("--outdir", required=True)
 
-    # speed/size controls
+    # Speed/size controls
     ap.add_argument("--stride", type=int, default=2)
-    ap.add_argument("--max_frames", type=int, default=800)
-    ap.add_argument("--crop", type=int, default=512, help="Center crop size (None -> full)", nargs="?")
+    ap.add_argument("--max_frames", type=_parse_maybe_int, default=800)
+    ap.add_argument("--crop", type=_parse_maybe_int, default=512,
+                    help="Center crop size; pass 'None' for full frame")
 
     # QC params
     ap.add_argument("--hp_window", type=int, default=15, help="Temporal HP window for PNR")
 
-    # NEW: normalization controls
+    # Normalization mode for reading
     ap.add_argument("--norm", dest="norm_mode",
                     choices=["none", "global", "percentile"],
                     default="none",
@@ -144,31 +161,41 @@ def main():
     if not files:
         raise SystemExit(f"No files match: {args.input}")
 
+    # Ensure odd hp_window once
+    if args.hp_window % 2 == 0:
+        args.hp_window += 1
+
     rows = []
     for f in files:
         print(f"[QC] {f}")
-        rows.append(
-            run_qc(
-                f,
-                args.outdir,
-                args.stride,
-                args.max_frames,
-                args.crop,
-                args.hp_window,
-                args.norm_mode,
-                args.p_low,
-                args.p_high,
+        try:
+            rows.append(
+                run_qc(
+                    f,
+                    args.outdir,
+                    args.stride,
+                    args.max_frames,
+                    args.crop,
+                    args.hp_window,
+                    args.norm_mode,
+                    args.p_low,
+                    args.p_high,
+                )
             )
-        )
+        except Exception as e:
+            print(f"  !! skipped due to error: {e}")
 
-    # write CSV summary
-    csv_path = os.path.join(args.outdir, "summary.csv")
-    with open(csv_path, "w", newline="") as fw:
-        w = csv.DictWriter(fw, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-    print(f"[OK] summary -> {csv_path}")
+    # Write CSV summary if we have any rows
+    if rows:
+        csv_path = os.path.join(args.outdir, "summary.csv")
+        with open(csv_path, "w", newline="") as fw:
+            w = csv.DictWriter(fw, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+        print(f"[OK] summary -> {csv_path}")
+    else:
+        print("[WARN] no QC rows produced")
 
 
 if __name__ == "__main__":
