@@ -1,11 +1,14 @@
 # --- file: hybrid_caim/__init__.py ---
 __all__ = [
-    "io",
-    "filters",
-    "preprocess",
-    "mc",
-    "summary",
     "cli",
+    "filters",
+    "flatfield",
+    "io",
+    "masks",
+    "mc",
+    "motion",
+    "preprocess",
+    "summary",
     "utils",
 ]
 
